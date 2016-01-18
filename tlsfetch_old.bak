@@ -1,0 +1,122 @@
+package main
+
+import(
+    "net"
+    "fmt"
+    "flag"
+    "crypto/tls"
+    "strings"
+    "io/ioutil"
+    "time"
+)
+var verbose bool
+
+func inc(ip net.IP) {
+    for j := len(ip)-1; j>=0; j-- {
+        ip[j]++
+        if ip[j] > 0 {
+            break
+        }
+    }
+}
+
+func parseRange(targetR string) [] string {
+    ip, ipnet, err := net.ParseCIDR(targetR)
+    if err != nil {
+        fmt.Println(err)
+        return nil
+    }
+    var ips [] string
+
+    for ip := ip.Mask(ipnet.Mask); ipnet.Contains(ip); inc(ip) {
+        ips = append(ips,ip.String())
+    }
+    return ips
+}
+
+func fetchCert(ip string,port string) (string,error) {
+    target := ip+":"+port
+
+    conn, err := tls.DialWithDialer(&net.Dialer{Timeout:time.Duration(5 * time.Second)},"tcp", target, &tls.Config{
+            InsecureSkipVerify:true,
+    })
+
+    if err != nil {
+        return "No Cert Found",err
+    } else {
+        tls := conn.ConnectionState().PeerCertificates[0].Subject.CommonName
+        conn.Close()
+        return tls,nil
+    }
+}
+
+func parseInputFile(input string) [] string {
+    var targets []string
+
+    data, err := ioutil.ReadFile(input)
+    if err != nil {
+        fmt.Println("Input file not found")
+        return nil
+    }
+
+    for _, line := range strings.Split(string(data),"\n") {
+        if strings.Index(line,"/") > -1 {
+            targets = append(targets, parseRange(line)...)
+        } else {
+            targets = append(targets, line)
+        }
+    }
+    return targets
+}
+
+func checkTargets(targets []string, ports []string) {
+    resc, errc := make(chan string), make(chan error)
+    for _,val := range targets{
+        for _,port := range ports{
+            go func(ip string,port string) {
+                out,err := fetchCert(ip,port)
+                if err != nil {
+                    errc <- err
+                    return
+                }
+                resc <- fmt.Sprintf("%s:%s - %s",ip,port,out)
+            }(val,port)
+        }
+    }
+
+    for i := 0; i < len(targets)*len(ports); i++ {
+        select {
+            case res := <-resc:
+                fmt.Println(res)
+            case err := <-errc:
+                if verbose == true {
+                    fmt.Println(err)
+                }
+        }
+    }
+}
+
+func main(){
+    targetPtr := flag.String("t", "", "Target IP or Range")
+    targetListPtr := flag.String("iL","","A Local file containing IP addresses and/or Ranges")
+    verbosePtr := flag.Bool("v", false, "Display errors (verbose)")
+    portPtr := flag.String("p","443","The ports to try connections. Specify comma seperated list")
+
+    flag.Parse()
+    var targets []string
+    verbose = *verbosePtr
+
+    if strings.Index(*targetPtr,"/") > -1 {
+        targets = parseRange(*targetPtr)
+    } else {
+        targets = []string{*targetPtr}
+    }
+
+    if *targetListPtr != "" {
+        targets = parseInputFile(*targetListPtr)
+    }
+
+    ports := strings.Split(*portPtr,",")
+    checkTargets(targets,ports)
+
+}
