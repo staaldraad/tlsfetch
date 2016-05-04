@@ -15,6 +15,7 @@ var checkSSL bool
 var checkSig bool
 var checkAlg bool
 var checkCiphers bool
+var displayAuth bool
 
 type Result struct {
     Ip string
@@ -23,6 +24,7 @@ type Result struct {
     Subject string
     SigAlg x509.SignatureAlgorithm
     PubKeyAlg string
+    Issuer string
     SSLv2 bool
     SSLv3 bool
 }
@@ -106,6 +108,7 @@ func fetchCert(ip string,port string) (Result,error) {
         res.Ip = ip
         res.Port = port
         res.SigAlg = conn.ConnectionState().PeerCertificates[0].SignatureAlgorithm
+        res.Issuer = conn.ConnectionState().PeerCertificates[0].Issuer.CommonName
         return res,nil
     }
 }
@@ -147,7 +150,11 @@ func checkTargets(targets []string, ports []string) {
     for i := 0; i < len(targets)*len(ports); i++ {
         select {
             case res := <-resc:
-                fmt.Printf("%s:%s - %s\n",res.Ip,res.Port,res.Subject)
+                if displayAuth == true {
+                    fmt.Printf("%s:%s - %s - Signed: %s\n",res.Ip,res.Port,res.Subject,res.Issuer)
+                } else {
+                    fmt.Printf("%s:%s - %s\n",res.Ip,res.Port,res.Subject)
+                }
                 if checkSSL == true {
                     fmt.Printf("SSLv3 Supported: %t\n",res.SSLv3)
                 }
@@ -176,6 +183,7 @@ func main(){
     portPtr := flag.String("p","443","The ports to try connections. Specify comma seperated list")
     checkSSLPtr := flag.Bool("ssl",false,"Check if SSLv2 and SSLv3 are supported")
     checkSigsPtr := flag.Bool("sig",false,"Check if signatures and ciphers used")
+    displayAuthPtr := flag.Bool("auth",false,"Display the signing authority (check for self-signed)")
 
     flag.Parse()
     var targets []string
@@ -192,6 +200,7 @@ func main(){
     }
     checkSSL = *checkSSLPtr
     checkSig = *checkSigsPtr
+    displayAuth = *displayAuthPtr
 
     ports := strings.Split(*portPtr,",")
     checkTargets(targets,ports)
